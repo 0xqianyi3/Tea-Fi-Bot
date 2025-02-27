@@ -87,9 +87,9 @@ def login(account_id, address, proxy):
         logger.error(f"账户 {account_id} (地址: {address}) 登录出错: {str(e)}")
         return False
 
-# 获取签到状态和倒计时（基于固定每日时间07:59 UTC+5分钟）
+# 获取签到状态和倒计时（24小时冷却时间+5分钟缓冲，UTC）
 def get_checkin_status(account_id, address, proxy):
-    """查询当前签到状态和下次可签到时间（基于每日07:59 UTC+5分钟缓冲）"""
+    """查询当前签到状态和下次可签到时间（24小时冷却时间+5分钟缓冲，UTC）"""
     try:
         # 获取并记录使用的代理（或直连）
         proxy_dict = get_proxy(proxy) if proxy else None
@@ -122,15 +122,11 @@ def get_checkin_status(account_id, address, proxy):
                 last_checkin = status_data.get('lastCheckIn', None)
                 if last_checkin:
                     last_time = datetime.strptime(last_checkin, "%Y-%m-%dT%H:%M:%S.%fZ")
-                    # 假设网站每天07:59 UTC允许签到，计算下次签到时间
-                    next_sign_time = datetime.utcnow().replace(hour=7, minute=59, second=0, microsecond=0)
-                    if next_sign_time <= last_time:
-                        next_sign_time += timedelta(days=1)  # 如果当前时间已过07:59 UTC，则用第二天
-                    # 增加5分钟缓冲
-                    next_time = next_sign_time + timedelta(minutes=5)
+                    # 24小时冷却时间+5分钟缓冲
+                    next_time = last_time + timedelta(hours=24, minutes=5)
                     current_time = datetime.utcnow()
-                    remaining_time = (next_time - current_time).total_seconds() / 60  # 剩余分钟
-                    logger.info(f"账户 {account_id} (地址: {address}) 下次可签到时间: {next_time}，剩余 {remaining_time:.2f} 分钟")
+                    remaining_minutes = (next_time - current_time).total_seconds() / 60  # 剩余分钟
+                    logger.info(f"账户 {account_id} (地址: {address}) 下次可签到时间: {next_time}，剩余 {remaining_minutes:.2f} 分钟")
                     return next_time
                 else:
                     logger.info(f"账户 {account_id} (地址: {address}) 未找到上次签到时间，允许立即签到")
@@ -149,24 +145,85 @@ def get_checkin_status(account_id, address, proxy):
 
 # 签到函数（使用 wallet/check-in）
 def check_in(account_id, address, proxy):
-    """执行签到操作（使用 wallet/check-in）"""
+    """执行签到操作（使用 wallet/check-in），二次运行时显示已执行过签到"""
     try:
         # 获取并记录使用的代理（或直连）
         proxy_dict = get_proxy(proxy) if proxy else None
         logger.info(f"账户 {account_id} (地址: {address}) 使用代理: {proxy if proxy_dict else '直连本地网络'}")
 
-        # 先查询签到状态
+        # 查询签到状态以检查冷却时间
         next_time = get_checkin_status(account_id, address, proxy)
         current_time = datetime.utcnow()
-        if current_time < next_time:
-            wait_seconds = (next_time - current_time).total_seconds()
-            logger.info(f"账户 {account_id} (地址: {address}) 签到冷却中，等待 {wait_seconds/3600:.2f} 小时")
-            return False
 
-        # 发送签到请求（添加 action 参数）
-        checkin_url = f'https://api.tea-fi.com/wallet/check-in?address={address}'
-        checkin_payload = {"action": 0}  # 添加必要的请求体
-        checkin_headers = {
+        # 检查是否已签到过（冷却时间内）
+        if current_time < next_time:
+            last_checkin = get_last_checkin(account_id, address, proxy)  # 获取上次签到时间
+            if last_checkin:
+                logger.info(f"账户 {account_id} (地址: {address}) 已执行过签到，跳过签到操作")
+                return False  # 跳过签到，不显示冷却时间
+
+        # 如果未签到过或冷却时间已结束，尝试签到
+        if current_time >= next_time:
+            # 发送签到请求（添加 action 参数）
+            checkin_url = f'https://api.tea-fi.com/wallet/check-in?address={address}'
+            checkin_payload = {"action": 0}  # 添加必要的请求体
+            checkin_headers = {
+                'User-Agent': get_random_user_agent(),
+                'Content-Type': 'application/json',
+                'accept': 'application/json, text/plain, */*',
+                'sec-ch-ua': '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+                'referer': 'https://app.tea-fi.com/',
+                'origin': 'https://app.tea-fi.com'
+            }
+
+            for attempt in range(3):  # 重试3次签到
+                checkin_response = requests.post(
+                    checkin_url,
+                    json=checkin_payload,  # 添加请求体
+                    headers=checkin_headers,
+                    proxies=proxy_dict,
+                    timeout=10
+                )
+                try:
+                    checkin_data = json.loads(checkin_response.text)
+                except json.JSONDecodeError:
+                    logger.error(f"账户 {account_id} (地址: {address}) 签到出错 (尝试 {attempt + 1}/3): 无效的JSON响应 - {checkin_response.text}")
+                    if attempt < 2:
+                        time.sleep(5)  # 等待5秒后重试
+                    continue
+                    return False
+
+                if checkin_response.status_code == 201:  # 签到成功
+                    logger.info(f"账户 {account_id} (地址: {address}) 签到已完成")
+                    return True
+                elif checkin_response.status_code == 400:
+                    logger.error(f"账户 {account_id} (地址: {address}) 签到失败 (尝试 {attempt + 1}/3): 400 Bad Request - {checkin_data if checkin_data else '无响应数据'}")
+                    if attempt < 2:
+                        time.sleep(5)  # 等待5秒后重试
+                    continue
+                else:
+                    logger.error(f"账户 {account_id} (地址: {address}) 签到失败 (尝试 {attempt + 1}/3): {checkin_response.status_code} - {checkin_data if checkin_data else '无响应数据'}")
+                    return False
+
+            logger.error(f"账户 {account_id} (地址: {address}) 签到失败: 达到最大重试次数")
+            return False
+        return False  # 冷却时间内跳过签到，不显示冷却时间
+    except Exception as e:
+        logger.error(f"账户 {account_id} (地址: {address}) 签到出错: {str(e)}")
+        return False
+
+# 辅助函数：获取上次签到时间
+def get_last_checkin(account_id, address, proxy):
+    """查询当前账户的上次签到时间"""
+    try:
+        proxy_dict = get_proxy(proxy) if proxy else None
+        status_url = 'https://api.tea-fi.com/wallet/check-in/current'
+        status_headers = {
             'User-Agent': get_random_user_agent(),
             'Content-Type': 'application/json',
             'accept': 'application/json, text/plain, */*',
@@ -180,40 +237,19 @@ def check_in(account_id, address, proxy):
             'origin': 'https://app.tea-fi.com'
         }
 
-        for attempt in range(3):  # 重试3次签到
-            checkin_response = requests.post(
-                checkin_url,
-                json=checkin_payload,  # 添加请求体
-                headers=checkin_headers,
-                proxies=proxy_dict,
-                timeout=10
-            )
-            try:
-                checkin_data = json.loads(checkin_response.text)
-            except json.JSONDecodeError:
-                logger.error(f"账户 {account_id} (地址: {address}) 签到出错 (尝试 {attempt + 1}/3): 无效的JSON响应 - {checkin_response.text}")
-                if attempt < 2:
-                    time.sleep(5)  # 等待5秒后重试
-                continue
-                return False
-
-            if checkin_response.status_code == 201:  # 签到成功
-                logger.info(f"账户 {account_id} (地址: {address}) 签到已完成")
-                return True
-            elif checkin_response.status_code == 400:
-                logger.error(f"账户 {account_id} (地址: {address}) 签到失败 (尝试 {attempt + 1}/3): 400 Bad Request - {checkin_data if checkin_data else '无响应数据'}")
-                if attempt < 2:
-                    time.sleep(5)  # 等待5秒后重试
-                continue
-            else:
-                logger.error(f"账户 {account_id} (地址: {address}) 签到失败 (尝试 {attempt + 1}/3): {checkin_response.status_code} - {checkin_data if checkin_data else '无响应数据'}")
-                return False
-
-        logger.error(f"账户 {account_id} (地址: {address}) 签到失败: 达到最大重试次数")
-        return False
+        status_response = requests.get(
+            f"{status_url}?address={address}",
+            headers=status_headers,
+            proxies=proxy_dict,
+            timeout=10
+        )
+        if status_response.status_code == 200:
+            status_data = json.loads(status_response.text)
+            return status_data.get('lastCheckIn', None)
+        return None
     except Exception as e:
-        logger.error(f"账户 {account_id} (地址: {address}) 签到出错: {str(e)}")
-        return False
+        logger.error(f"账户 {account_id} (地址: {address}) 获取上次签到时间出错: {str(e)}")
+        return None
 
 # 每日循环任务（轮流签到，所有账户完成后统一显示下次签到时间）
 def daily_task():
@@ -226,38 +262,31 @@ def daily_task():
         if login(account_id, address, proxies[account_id - 1]):
             if check_in(account_id, address, proxies[account_id - 1]):
                 logger.info(f"账户 {account_id} (地址: {address}) 签到已完成")
-                # 获取当前账户的下次签到时间（基于07:59 UTC+5分钟）
+                # 获取当前账户的下次签到时间（24小时后+5分钟）
                 next_time = get_checkin_status(account_id, address, proxies[account_id - 1])
                 last_next_time = next_time if last_next_time is None or next_time > last_next_time else last_next_time
             else:
-                logger.info(f"账户 {account_id} (地址: {address}) 签到失败")
+                logger.info(f"账户 {account_id} (地址: {address}) 已执行过签到，跳过签到操作")
                 all_success = False
-                # 为失败账户设置默认下次时间（07:59 UTC+5分钟）
-                next_time = datetime.utcnow().replace(hour=7, minute=59, second=0, microsecond=0)
-                if next_time <= datetime.utcnow():
-                    next_time += timedelta(days=1)
-                last_next_time = next_time + timedelta(minutes=5) if last_next_time is None else last_next_time
+                # 为失败账户设置默认下次时间（24小时后+5分钟）
+                next_time = datetime.utcnow() + timedelta(hours=24, minutes=5)
+                last_next_time = next_time if last_next_time is None else last_next_time
         else:
             logger.error(f"账户 {account_id} (地址: {address}) 登录失败，无法签到")
             all_success = False
-            # 为登录失败账户设置默认下次时间（07:59 UTC+5分钟）
-            next_time = datetime.utcnow().replace(hour=7, minute=59, second=0, microsecond=0)
-            if next_time <= datetime.utcnow():
-                next_time += timedelta(days=1)
-            last_next_time = next_time + timedelta(minutes=5) if last_next_time is None else last_next_time
+            # 为登录失败账户设置默认下次时间（24小时后+5分钟）
+            next_time = datetime.utcnow() + timedelta(hours=24, minutes=5)
+            last_next_time = next_time if last_next_time is None else last_next_time
 
-    # 所有账户签完后，动态计算下次签到时间（基于07:59 UTC+5分钟）
+    # 所有账户签完后，动态计算下次签到时间（24小时后+5分钟）
     if last_next_time:
         logger.info(f"所有账户签到处理完成，计划下次签到时间: {last_next_time}")
         schedule_time = last_next_time.strftime("%H:%M")
         logger.info(f"所有账户计划于 {schedule_time} UTC 执行下一次签到")
     else:
-        logger.warning("无法确定下次签到时间，使用默认07:59 UTC+5分钟后")
-        next_sign_time = datetime.utcnow().replace(hour=7, minute=59, second=0, microsecond=0)
-        if next_sign_time <= datetime.utcnow():
-            next_sign_time += timedelta(days=1)
-        last_next_time = next_sign_time + timedelta(minutes=5)
-        schedule_time = last_next_time.strftime("%H:%M")
+        logger.warning("无法确定下次签到时间，使用默认24小时后+5分钟")
+        next_sign_time = datetime.utcnow() + timedelta(hours=24, minutes=5)
+        schedule_time = next_sign_time.strftime("%H:%M")
         logger.info(f"所有账户计划于 {schedule_time} UTC 执行下一次签到")
 
     # 计划下次签到（动态调整时间）
