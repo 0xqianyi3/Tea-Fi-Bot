@@ -16,9 +16,9 @@ sudo apt install python3 python3-pip git -y
 选择一个目录（如 `/home/你的用户名/tea-fi-autocheck`），然后运行以下命令：
 
 ```bash
-mkdir -p /home/你的用户名/tea-fi-autocheck
-cd /home/你的用户名/tea-fi-autocheck
-git clone https://github.com/你的用户名/tea-fi-autocheck.git .
+mkdir -p tea-fi-autocheck
+cd tea-fi-autocheck
+git clone https://github.com/0xqianyi3/Tea-Fi-Bot.git .
 ```
 
 注意末尾的 `.` 表示克隆到当前目录。
@@ -57,7 +57,7 @@ pip3 install -r requirements.txt
 nano wallet_address.txt
 ```
 
-输入地址（如 `0xa3dfd1f30Bb82230e8c876D3f294deB98B917F16`），每行一个，保存（`Ctrl+O`，然后 `Enter`，`Ctrl+X` 退出）。
+输入地址（如 `0x12345678999999999999`），每行一个，保存（`Ctrl+O`，然后 `Enter`，`Ctrl+X` 退出）。
 
 编辑 `proxy.txt` 文件：
 
@@ -67,17 +67,28 @@ nano proxy.txt
 
 输入代理（如 `http://127.0.0.1:10809`），每行一个，保存。
 
-### 7. 运行脚本
+### 7. 新建一个会话
+
+```bash
+screen -S teafi-bot
+```
+
+### 8. 运行脚本
 
 运行以下命令以执行脚本：
 
 ```bash
 python3 main.py
 ```
+### 8. 重新连接到会话
+
+```bash
+screen -r teafi-bot
+```
 
 查看 `log.txt` 记录结果。
 
-### 8. 退出虚拟环境
+### 9. 退出虚拟环境
 
 运行以下命令退出虚拟环境：
 
