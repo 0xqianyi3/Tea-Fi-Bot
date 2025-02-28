@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from network_utils import get_proxy, get_random_user_agent
 from logger import setup_logger
-from banner import show_banner  # 导入banner.py中的函数
+from banner import show_banner  
 
 # 显示banner
 show_banner()
@@ -183,15 +183,13 @@ def daily_task():
             logger.error(f"账户 {account_id} (地址: {address}) 登录失败，无法签到")
             all_success = False
 
-    # 所有账户签完后，计划下次签到时间（北京时间次日10:00 AM）
     next_sign_time = datetime.now() + timedelta(days=1)
     next_sign_time = next_sign_time.replace(hour=10, minute=0, second=0, microsecond=0)
     if all_success:
-        logger.info(f"所有账户签到成功，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M 北京时间')}")
+        logger.info(f"所有账户签到成功，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M ')}")
     else:
-        logger.info(f"部分账户签到失败，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M 北京时间')}")
+        logger.info(f"部分账户签到失败，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M ')}")
 
-    # 计划下次签到（北京时间10:00 AM）
     schedule_time = next_sign_time.strftime("%H:%M")
     schedule.every().day.at(schedule_time).do(daily_task)
 
