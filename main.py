@@ -199,9 +199,9 @@ def daily_task():
     next_sign_time = datetime.now() + timedelta(days=1)
     next_sign_time = next_sign_time.replace(hour=10, minute=0, second=0, microsecond=0)
     if not failed_accounts:
-        logger.info(f"所有账户处理完毕，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M 北京时间')}")
+        logger.info(f"所有账户处理完毕，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M')}")
     else:
-        logger.info(f"部分账户签到失败，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M 北京时间')}")
+        logger.info(f"部分账户签到失败，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M')}")
 
     schedule_time = next_sign_time.strftime("%H:%M")
     schedule.every().day.at(schedule_time).do(daily_task)
