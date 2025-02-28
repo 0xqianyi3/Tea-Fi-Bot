@@ -16,7 +16,7 @@ show_banner()
 # 配置日志
 logger = setup_logger('log.txt')
 
-# 读取文件（容错处理代理行数不足）
+# 读取文件
 def read_files():
     """读取钱包地址和代理地址文件，代理不足时使用直连本地网络"""
     try:
@@ -145,7 +145,7 @@ def check_in(account_id, address, proxy):
         return "failed"
     except Exception as e:
         logger.error(f"账户 {account_id} (地址: {address}) 签到出错: {str(e)}")
-        return "login_failed"
+        return "failed"  # 修改为 "failed"，统一处理网络超时等失败情况
 
 # 每日循环任务
 def daily_task():
@@ -162,20 +162,20 @@ def daily_task():
                 logger.info(f"账户 {account_id} (地址: {address}) 签到已完成")
             elif result == "already_checked":
                 logger.info(f"账户 {account_id} (地址: {address}) 今日已签到，无需重复签到")
-            elif result == "failed" or result == "error":
+            elif result in ["failed", "error"]:
                 logger.info(f"账户 {account_id} (地址: {address}) 签到失败，等待重试")
                 failed_accounts.append((account_id, address, proxies[account_id - 1]))
-            elif result == "login_failed":
-                logger.error(f"账户 {account_id} (地址: {address}) 登录失败，无法签到")
         else:
-            logger.error(f"账户 {account_id} (地址: {address}) 登录失败，无法签到")
+            logger.error(f"账户 {account_id} (地址: {address}) 登录失败，等待重试")
+            failed_accounts.append((account_id, address, proxies[account_id - 1]))
 
-    # 重试签到失败的账户（最多5次，每次间隔10秒）
+    # 重试签到失败的账户（5次，每次间隔5秒）
     if failed_accounts:
         logger.info("开始重试签到失败的账户...")
         for _ in range(5):
             temp_failed = []
             for account_id, address, proxy in failed_accounts:
+                logger.info(f"重试账户 {account_id} (第 {_ + 1}/5 次)")
                 if login(account_id, address, proxy):
                     result = check_in(account_id, address, proxy)
                     if result == "success":
@@ -185,15 +185,13 @@ def daily_task():
                     elif result in ["failed", "error"]:
                         logger.info(f"账户 {account_id} (地址: {address}) 重试签到失败，加入下次重试")
                         temp_failed.append((account_id, address, proxy))
-                    elif result == "login_failed":
-                        logger.error(f"账户 {account_id} (地址: {address}) 重试时登录失败")
                 else:
-                    logger.error(f"账户 {account_id} (地址: {address}) 重试时登录失败")
+                    logger.error(f"账户 {account_id} (地址: {address}) 重试时登录失败，加入下次重试")
                     temp_failed.append((account_id, address, proxy))
             failed_accounts = temp_failed
             if not failed_accounts:
                 break
-            time.sleep(10)
+            time.sleep(5)  # 每次重试间隔5秒
         if failed_accounts:
             logger.warning(f"账户 {[(acc_id, addr) for acc_id, addr, _ in failed_accounts]} 重试5次后仍失败")
 
@@ -201,9 +199,9 @@ def daily_task():
     next_sign_time = datetime.now() + timedelta(days=1)
     next_sign_time = next_sign_time.replace(hour=10, minute=0, second=0, microsecond=0)
     if not failed_accounts:
-        logger.info(f"所有账户处理完毕，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M ')}")
+        logger.info(f"所有账户处理完毕，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M 北京时间')}")
     else:
-        logger.info(f"部分账户签到失败，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M ')}")
+        logger.info(f"部分账户签到失败，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M 北京时间')}")
 
     schedule_time = next_sign_time.strftime("%H:%M")
     schedule.every().day.at(schedule_time).do(daily_task)
