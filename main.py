@@ -29,7 +29,6 @@ def read_files():
             logger.error("wallet_address.txt为空！")
             raise ValueError("请确保wallet_address.txt至少包含一个地址")
         
-        # 如果代理数量少于地址数量，补齐为None（直连本地网络）
         if len(proxies) < len(addresses):
             logger.warning(f"proxy.txt行数 ({len(proxies)}) 少于wallet_address.txt行数 ({len(addresses)})，缺少的代理将使用直连本地网络")
             proxies.extend([None] * (len(addresses) - len(proxies)))
@@ -37,20 +36,18 @@ def read_files():
             logger.warning(f"proxy.txt行数 ({len(proxies)}) 多于wallet_address.txt行数 ({len(addresses)})，多余的代理将被忽略")
             proxies = proxies[:len(addresses)]
 
-        return list(enumerate(addresses, 1)), proxies  # 返回带索引的地址列表 (index, address)
+        return list(enumerate(addresses, 1)), proxies
     except Exception as e:
         logger.error(f"读取文件出错: {str(e)}")
         raise
 
-# 登录函数（直接用地址，无需私钥）
+# 登录函数
 def login(account_id, address, proxy):
     """使用EVM地址登录（无签名），代理缺失时使用直连本地网络"""
     try:
-        # 获取并记录使用的代理（或直连）
         proxy_dict = get_proxy(proxy) if proxy else None
         logger.info(f"账户 {account_id} (地址: {address}) 使用代理: {proxy if proxy_dict else '直连本地网络'}")
 
-        # 发送登录请求
         login_url = 'https://api.tea-fi.com/wallets'
         login_payload = {'address': address}
         login_headers = {
@@ -74,49 +71,31 @@ def login(account_id, address, proxy):
             timeout=10
         )
 
-        # 解析响应
         try:
             login_data = json.loads(login_response.text)
         except json.JSONDecodeError:
             logger.error(f"账户 {account_id} (地址: {address}) 登录出错: 无效的JSON响应 - {login_response.text}")
             return False
 
-        if login_response.status_code == 201:  # 登录成功
+        if login_response.status_code == 201:
             logger.info(f"账户 {account_id} (地址: {address}) 登录成功")
             return True
         else:
-            logger.error(f"账户 {account_id} (地址: {address}) 登录失败: {login_response.status_code}")
+            logger.error(f"账户 {account_id} (地址: {address}) 登录失败: {login_response.status_code} - {login_response.text}")
             return False
     except Exception as e:
         logger.error(f"账户 {account_id} (地址: {address}) 登录出错: {str(e)}")
         return False
 
-# 获取签到状态（每次运行尝试签到）
-def get_checkin_status(account_id, address, proxy):
-    """每次运行尝试签到，不依赖固定时间"""
-    try:
-        # 获取并记录使用的代理（或直连）
-        proxy_dict = get_proxy(proxy) if proxy else None
-        logger.info(f"账户 {account_id} (地址: {address}) 使用代理: {proxy if proxy_dict else '直连本地网络'}")
-
-        # 每次运行都允许签到
-        return datetime.now()  # 使用北京时间，允许立即签到
-    except Exception as e:
-        logger.error(f"账户 {account_id} (地址: {address}) 查询签到状态出错: {str(e)}")
-        return datetime.now()  # 允许立即签到
-
-# 签到函数（使用 wallet/check-in）
+# 签到函数
 def check_in(account_id, address, proxy):
-    """执行签到操作（使用 wallet/check-in），每次运行尝试签到"""
+    """执行签到操作，返回更详细的状态"""
     try:
-        # 获取并记录使用的代理（或直连）
         proxy_dict = get_proxy(proxy) if proxy else None
         logger.info(f"账户 {account_id} (地址: {address}) 使用代理: {proxy if proxy_dict else '直连本地网络'}")
 
-        # 每次运行都尝试签到
-        # 发送签到请求（添加 action 参数）
         checkin_url = f'https://api.tea-fi.com/wallet/check-in?address={address}'
-        checkin_payload = {"action": 0}  # 添加必要的请求体
+        checkin_payload = {"action": 0}
         checkin_headers = {
             'User-Agent': get_random_user_agent(),
             'Content-Type': 'application/json',
@@ -131,10 +110,10 @@ def check_in(account_id, address, proxy):
             'origin': 'https://app.tea-fi.com'
         }
 
-        for attempt in range(3):  # 重试3次签到
+        for attempt in range(3):
             checkin_response = requests.post(
                 checkin_url,
-                json=checkin_payload,  # 添加请求体
+                json=checkin_payload,
                 headers=checkin_headers,
                 proxies=proxy_dict,
                 timeout=10
@@ -144,67 +123,102 @@ def check_in(account_id, address, proxy):
             except json.JSONDecodeError:
                 logger.error(f"账户 {account_id} (地址: {address}) 签到出错 (尝试 {attempt + 1}/3): 无效的JSON响应 - {checkin_response.text}")
                 if attempt < 2:
-                    time.sleep(5)  # 等待5秒后重试
+                    time.sleep(5)
                 continue
-                return False
 
-            if checkin_response.status_code == 201:  # 签到成功
+            if checkin_response.status_code == 201:
                 logger.info(f"账户 {account_id} (地址: {address}) 签到已完成")
-                return True
+                return "success"
+            elif checkin_response.status_code == 400 and checkin_data.get('message') == 'Already checked in today':
+                logger.info(f"账户 {account_id} (地址: {address}) 今日已签到，跳过")
+                return "already_checked"
             elif checkin_response.status_code == 400:
-                logger.info(f"账户 {account_id} (地址: {address}) 签到失败 (尝试 {attempt + 1}/3): 400 Bad Request - {checkin_data if checkin_data else '无响应数据'}")
+                logger.info(f"账户 {account_id} (地址: {address}) 签到失败 (尝试 {attempt + 1}/3): 400 Bad Request - {checkin_data}")
                 if attempt < 2:
-                    time.sleep(5)  # 等待5秒后重试
+                    time.sleep(5)
                 continue
             else:
-                logger.error(f"账户 {account_id} (地址: {address}) 签到失败 (尝试 {attempt + 1}/3): {checkin_response.status_code} - {checkin_data if checkin_data else '无响应数据'}")
-                return False
+                logger.error(f"账户 {account_id} (地址: {address}) 签到失败 (尝试 {attempt + 1}/3): {checkin_response.status_code} - {checkin_data}")
+                return "error"
 
         logger.error(f"账户 {account_id} (地址: {address}) 签到失败: 达到最大重试次数")
-        return False
+        return "failed"
     except Exception as e:
         logger.error(f"账户 {account_id} (地址: {address}) 签到出错: {str(e)}")
-        return False
+        return "login_failed"
 
-# 每日循环任务（轮流签到，所有账户完成后统一显示下次签到时间）
+# 每日循环任务
 def daily_task():
-    """每日执行所有账户的轮流签到"""
+    """每日执行所有账户的轮流签到，失败后重试"""
     accounts, proxies = read_files()
-    all_success = True  # 标记所有账户是否签到成功
+    failed_accounts = []
+
+    # 第一次尝试所有账户
     for account_id, address in accounts:
         logger.info(f"开始处理账户 {account_id}")
         if login(account_id, address, proxies[account_id - 1]):
-            if check_in(account_id, address, proxies[account_id - 1]):
+            result = check_in(account_id, address, proxies[account_id - 1])
+            if result == "success":
                 logger.info(f"账户 {account_id} (地址: {address}) 签到已完成")
-            else:
-                logger.info(f"账户 {account_id} (地址: {address}) 签到失败")
-                all_success = False
+            elif result == "already_checked":
+                logger.info(f"账户 {account_id} (地址: {address}) 今日已签到，无需重复签到")
+            elif result == "failed" or result == "error":
+                logger.info(f"账户 {account_id} (地址: {address}) 签到失败，等待重试")
+                failed_accounts.append((account_id, address, proxies[account_id - 1]))
+            elif result == "login_failed":
+                logger.error(f"账户 {account_id} (地址: {address}) 登录失败，无法签到")
         else:
             logger.error(f"账户 {account_id} (地址: {address}) 登录失败，无法签到")
-            all_success = False
 
+    # 重试签到失败的账户（最多5次，每次间隔10秒）
+    if failed_accounts:
+        logger.info("开始重试签到失败的账户...")
+        for _ in range(5):
+            temp_failed = []
+            for account_id, address, proxy in failed_accounts:
+                if login(account_id, address, proxy):
+                    result = check_in(account_id, address, proxy)
+                    if result == "success":
+                        logger.info(f"账户 {account_id} (地址: {address}) 重试签到成功")
+                    elif result == "already_checked":
+                        logger.info(f"账户 {account_id} (地址: {address}) 今日已签到，无需重复签到")
+                    elif result in ["failed", "error"]:
+                        logger.info(f"账户 {account_id} (地址: {address}) 重试签到失败，加入下次重试")
+                        temp_failed.append((account_id, address, proxy))
+                    elif result == "login_failed":
+                        logger.error(f"账户 {account_id} (地址: {address}) 重试时登录失败")
+                else:
+                    logger.error(f"账户 {account_id} (地址: {address}) 重试时登录失败")
+                    temp_failed.append((account_id, address, proxy))
+            failed_accounts = temp_failed
+            if not failed_accounts:
+                break
+            time.sleep(10)
+        if failed_accounts:
+            logger.warning(f"账户 {[(acc_id, addr) for acc_id, addr, _ in failed_accounts]} 重试5次后仍失败")
+
+    # 计划下次签到时间（北京时间次日10:00 AM）
     next_sign_time = datetime.now() + timedelta(days=1)
     next_sign_time = next_sign_time.replace(hour=10, minute=0, second=0, microsecond=0)
-    if all_success:
-        logger.info(f"所有账户签到成功，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M ')}")
+    if not failed_accounts:
+        logger.info(f"所有账户处理完毕，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M ')}")
     else:
         logger.info(f"部分账户签到失败，计划下次签到时间: {next_sign_time.strftime('%Y-%m-%d %H:%M ')}")
 
     schedule_time = next_sign_time.strftime("%H:%M")
     schedule.every().day.at(schedule_time).do(daily_task)
 
-# 动态调度任务（立即执行一次签到，然后每天循环）
+# 动态调度任务
 def schedule_dynamic_tasks():
-    """动态设置签到时间，按所有账户的轮流签到调度，并立即执行一次签到"""
+    """动态设置签到时间，并立即执行一次签到"""
     try:
         logger.info("脚本启动，开始处理所有账户的签到...")
-        daily_task()  # 立即执行一次签到
+        daily_task()
 
         logger.info("脚本启动完成，开始动态签到任务...")
-
         while True:
             schedule.run_pending()
-            time.sleep(60)  # 每分钟检查一次
+            time.sleep(60)
     except KeyboardInterrupt:
         logger.info("脚本已手动停止，退出程序...")
         exit(0)
